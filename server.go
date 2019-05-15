@@ -3,7 +3,17 @@ package main
 import "fmt"
 import "net/http"
 import "strings"
+import "log"
 import "github.com/garyburd/redigo/redis"
+
+type return_data struct {
+	retstring     string
+	retint64      int64
+	retbulkstring []byte
+	retarray      interface{}
+	err           error
+	rettype       string
+}
 
 func get_conn_redis(port string) redis.Conn {
 	c, err := redis.Dial("tcp", port)
@@ -13,25 +23,58 @@ func get_conn_redis(port string) redis.Conn {
 	return c
 }
 
-func do_redis(handle redis.Conn, command string, args ...string) (string, error) {
+func do_redis(handle redis.Conn, command string, args ...string) return_data {
 	s := make([]interface{}, len(args))
 	for i, v := range args {
 		s[i] = v
 	}
-	return  redis.String(handle.Do(command, s[0:]...))
+	ret, err := handle.Do(command, s[0:]...)
+	var rtrn return_data
 
+	switch ret.(type) {
+	case int64:
+		rtrn.retint64, rtrn.err = redis.Int64(ret, err)
+		rtrn.rettype = "int"
+	case string:
+		rtrn.retstring, rtrn.err = redis.String(ret, err)
+		rtrn.rettype = "string"
+	case []byte:
+		rtrn.retbulkstring, rtrn.err = redis.Bytes(ret, err)
+		rtrn.rettype = "byte"
+	case interface{}:
+		rtrn.retarray = ret
+		rtrn.rettype = "interface"
+	}
+	return rtrn
 }
 
 func do_http(w http.ResponseWriter, r *http.Request, hndl redis.Conn) {
 	s := strings.Split(r.URL.String(), "/")
 
-	ret, err := do_redis(hndl, s[2], s[3:]...)
-	fmt.Println(err)
+	ret := do_redis(hndl, s[2], s[3:]...)
+	fmt.Println(ret.err)
 
-	if err != nil {
-		fmt.Fprintln(w, ">>", err)
+	if ret.err != nil {
+		fmt.Fprintln(w, ">>", ret.err)
 	} else {
-		fmt.Fprintln(w, ">>", ret)
+		switch ret.rettype {
+		case "string":
+			log.Print("type: string, output: ", ret.retstring)
+			fmt.Fprintln(w, ">>", ret.retstring)
+
+		case "int":
+			log.Print("type: int, output: ", ret.retint64)
+			fmt.Fprintln(w, ">>", ret.retint64)
+
+		case "byte":
+			output, _ := redis.String(ret.retbulkstring, ret.err)
+			log.Print("type: bulkstring, output: ", output)
+			fmt.Fprintln(w, ">>", output)
+
+		case "interface":
+			log.Print("type: inteface, output: ", ret.retarray)
+			fmt.Fprintln(w, ">>", ret.retarray)
+		}
 	}
 }
 
